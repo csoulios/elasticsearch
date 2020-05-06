@@ -19,20 +19,28 @@
 
 package org.elasticsearch.search.aggregations.metrics;
 
+import org.elasticsearch.action.admin.indices.template.put.PutIndexTemplateRequest;
 import org.elasticsearch.action.index.IndexRequestBuilder;
 import org.elasticsearch.action.search.SearchResponse;
+import org.elasticsearch.action.support.master.AcknowledgedResponse;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.xcontent.XContentType;
 import org.elasticsearch.index.fielddata.ScriptDocValues;
 import org.elasticsearch.plugins.Plugin;
+import org.elasticsearch.rest.RestStatus;
 import org.elasticsearch.script.MockScriptPlugin;
 import org.elasticsearch.script.Script;
 import org.elasticsearch.script.ScriptType;
+import org.elasticsearch.search.aggregations.AggregationBuilder;
+import org.elasticsearch.search.aggregations.AggregationBuilders;
 import org.elasticsearch.search.aggregations.Aggregator.SubAggCollectionMode;
+import org.elasticsearch.search.aggregations.BucketOrder;
 import org.elasticsearch.search.aggregations.InternalAggregation;
 import org.elasticsearch.search.aggregations.bucket.global.Global;
 import org.elasticsearch.search.aggregations.bucket.terms.Terms;
 import org.elasticsearch.test.ESIntegTestCase;
 
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -507,5 +515,56 @@ public class CardinalityIT extends ESIntegTestCase {
                 .getHitCount(), equalTo(0L));
         assertThat(client().admin().indices().prepareStats("cache_test_idx").setRequestCache(true).get().getTotal().getRequestCache()
                 .getMissCount(), equalTo(2L));
+    }
+
+    /**
+     * Reproducing bug when using terms aggregation with a cardinality subaggregation and the cardinality subaggregation
+     * is used for sorting the terms buckets.
+     */
+    public void testTermsAggWithSortByCardinalitySubAgg() {
+        final AcknowledgedResponse templateResponse = client().admin().indices()
+            .putTemplate(new PutIndexTemplateRequest().mapping("test_idx",
+                "{\"test_idx\": {\n" +
+                    " \"properties\": {\n" +
+                    " \"tag\": {\n" +
+                    " \"type\": \"keyword\" \n" +
+                    " }\n" +
+                    " }\n" +
+                    " }\n" +
+                    "}", XContentType.JSON)
+                .patterns(Collections.singletonList("test_idx*"))
+                .name("template_test")
+                .settings(Collections.singletonMap("number_of_shards", "1")))
+            .actionGet();
+        assertTrue(templateResponse.isAcknowledged());
+        assertEquals(RestStatus.CREATED, client()
+            .prepareIndex("test_idx", "_doc", "id1")
+            .setSource("{ }", XContentType.JSON)
+            .setRouting("1")
+            .execute().actionGet().status());
+        assertEquals(RestStatus.CREATED, client()
+            .prepareIndex("test_idx", "_doc", "id2")
+            .setSource("{ \"tag\": \"tag1\"}", XContentType.JSON)
+            .setRouting("1")
+            .execute().actionGet().status());
+        assertEquals(RestStatus.CREATED, client()
+            .prepareIndex("test_idx", "_doc", "id3")
+            .setSource("{ }", XContentType.JSON)
+            .setRouting("1")
+            .execute().actionGet().status());
+        refresh();
+
+        AggregationBuilder aggregationBuilder = AggregationBuilders.terms("term")
+            .field("_id")
+            .size(1)
+            .order(BucketOrder.aggregation("card", true))
+            .subAggregation(AggregationBuilders.cardinality("card").field("tag").precisionThreshold(100));
+
+        SearchResponse response = client().prepareSearch("test_idx").setSize(0).
+            addAggregation(aggregationBuilder).
+            execute().
+            actionGet();
+
+        assertEquals(0, response.getFailedShards());
     }
 }
