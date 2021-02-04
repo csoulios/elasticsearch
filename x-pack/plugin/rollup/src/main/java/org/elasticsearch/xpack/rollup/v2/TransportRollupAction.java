@@ -50,6 +50,7 @@ import org.elasticsearch.xpack.core.rollup.action.RollupIndexerAction;
 import org.elasticsearch.xpack.core.rollup.action.RollupAction;
 import org.elasticsearch.xpack.core.rollup.job.HistogramGroupConfig;
 import org.elasticsearch.xpack.core.rollup.job.MetricConfig;
+import org.elasticsearch.xpack.rollup.Rollup;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -225,16 +226,15 @@ public class TransportRollupAction extends AcknowledgedTransportMasterNodeAction
                 Map<String, String> rollupIndexRollupMetadata = new HashMap<>();
                 rollupIndexRollupMetadata.put(RollupMetadata.SOURCE_INDEX_NAME_META_FIELD, rollupGroupKeyName);
 
-                DataStream dataStream = null;
+                Metadata.Builder metadataBuilder = Metadata.builder(currentState.metadata())
+                    .put(IndexMetadata.builder(rollupIndexMetadata).putCustom(RollupMetadata.TYPE, rollupIndexRollupMetadata));
+
                 if (originalIndex.getParentDataStream() != null) {
                     // If rolling up a backing index of a datastream, add rolled up index to backing datastream
                     DataStream originalDataStream = originalIndex.getParentDataStream().getDataStream();
 
-                    Map<String, Object> dsMetadata = originalDataStream.getMetadata() != null
-                        ? originalDataStream.getMetadata() : new HashMap<>();
-                    final RollupMetadata rollupMetadata = dsMetadata.containsKey(RollupMetadata.TYPE) ?
-                        (RollupMetadata) dsMetadata.get(RollupMetadata.TYPE) : null;
-                    final Map<String, RollupGroup> rollupGroups = rollupMetadata != null ?
+                    RollupMetadata rollupMetadata = originalDataStream.getRollup();
+                    Map<String, RollupGroup> rollupGroups = rollupMetadata != null ?
                         new HashMap<>(rollupMetadata.rollupGroups()) : new HashMap<>();
 
                     RollupActionConfig rollupConfig = request.getRollupConfig();
@@ -254,19 +254,12 @@ public class TransportRollupAction extends AcknowledgedTransportMasterNodeAction
                         group.add(rollupIndexName, rollupInfo);
                         rollupGroups.put(rollupGroupKeyName, group);
                     }
-                    dsMetadata.put(RollupMetadata.TYPE, new RollupMetadata(rollupGroups));
-
                     List<Index> backingIndices = new ArrayList<>(originalDataStream.getIndices());
                     backingIndices.add(rollupIndex);
-                    dataStream = new DataStream(originalDataStream.getName(), originalDataStream.getTimeStampField(),
-                        backingIndices, originalDataStream.getGeneration(), dsMetadata);
 
-                }
-
-                Metadata.Builder metadataBuilder = Metadata.builder(currentState.metadata())
-                    .put(IndexMetadata.builder(rollupIndexMetadata).putCustom(RollupMetadata.TYPE, rollupIndexRollupMetadata));
-
-                if (dataStream != null) {
+                    DataStream dataStream = new DataStream(originalDataStream.getName(), originalDataStream.getTimeStampField(),
+                        backingIndices, originalDataStream.getGeneration(), originalDataStream.getMetadata(),
+                        originalDataStream.isHidden(), originalDataStream.isReplicated(), new RollupMetadata(rollupGroups));
                     metadataBuilder.put(dataStream);
                 }
                 return ClusterState.builder(currentState).metadata(metadataBuilder.build()).build();

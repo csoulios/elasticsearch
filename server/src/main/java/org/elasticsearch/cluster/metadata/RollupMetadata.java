@@ -32,7 +32,7 @@ public class RollupMetadata extends AbstractDiffable<RollupMetadata> implements 
     private static final ParseField ROLLUP = new ParseField("rollup");
 
     @SuppressWarnings("unchecked")
-    private static final ConstructingObjectParser<RollupMetadata, Void> PARSER = new ConstructingObjectParser<>(TYPE, false,
+    public static final ConstructingObjectParser<RollupMetadata, Void> PARSER = new ConstructingObjectParser<>(TYPE, false,
         a -> new RollupMetadata((Map<String, RollupGroup>) a[0]));
 
     static {
